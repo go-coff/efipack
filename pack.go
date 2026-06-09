@@ -15,6 +15,8 @@ import (
 	"io"
 
 	"github.com/go-coff/peln/appender"
+
+	"github.com/go-coff/efipack/stub"
 )
 
 // Wire-format constants for the .payload header. The runtime stub
@@ -124,14 +126,20 @@ func packBytes(src []byte, out io.Writer, opts Options) (PackResult, error) {
 	payload = append(payload, sz[:]...)
 	payload = append(payload, compressed...)
 
-	// Build the placeholder PE32+ skeleton (correct headers + an empty
-	// .stub section) and then use peln/appender to add the .payload
-	// section the firmware-side stub will read at runtime.
-	skeleton, err := buildSkeleton(arch)
+	// Build the envelope base PE. For architectures that have a real
+	// per-arch decompressor stub blob (PR2: amd64 only), use the
+	// stub's complete PE32+ as the envelope and append .payload to
+	// it directly; the stub's entry point will, at firmware load
+	// time, walk the section table to find .payload, decompress it
+	// and chain-boot. For architectures still on the PR1 sentinel
+	// path, fall back to the placeholder skeleton (the resulting
+	// PE is structurally valid but will fault if the firmware ever
+	// jumps to its .stub body — by design until PR2-next-sprint).
+	envelope, err := envelopeBase(arch)
 	if err != nil {
 		return PackResult{}, err
 	}
-	packed, err := appender.Append(skeleton, []appender.Section{
+	packed, err := appender.Append(envelope, []appender.Section{
 		{
 			Name:            payloadSectionName,
 			Data:            payload,
@@ -153,6 +161,43 @@ func packBytes(src []byte, out io.Writer, opts Options) (PackResult, error) {
 		Compressor:     opts.Compressor,
 		Arch:           arch,
 	}, nil
+}
+
+// envelopeBase returns the base PE32+ image that .payload will be
+// appended to.
+//
+// For architectures whose runtime decompressor stub is shipped in
+// this build (currently amd64), it returns the full stub PE — the
+// stub's headers, .text/.rodata/.data/.reloc sections are preserved
+// byte-for-byte, and appender.Append slots .payload in after the
+// last existing section without disturbing any existing RVA. The
+// resulting PE is a runnable self-extracting EFI.
+//
+// For architectures still on the PR1 placeholder path
+// (arm64/riscv64/loong64), it returns buildSkeleton's TODO_STUB
+// skeleton. The output PE is structurally valid (firmware loads it
+// without complaint) but faults on entry — by design until the
+// per-arch stub lands.
+func envelopeBase(a Arch) ([]byte, error) {
+	if blob := archStubBlob(a); blob != nil {
+		// Defensive copy so an appender bug or future caller mutating
+		// the returned slice can't corrupt the embedded blob.
+		out := make([]byte, len(blob))
+		copy(out, blob)
+		return out, nil
+	}
+	return buildSkeleton(a)
+}
+
+// archStubBlob returns the embedded per-arch decompressor stub PE,
+// or nil if no stub ships for a in this build.
+func archStubBlob(a Arch) []byte {
+	switch a {
+	case AmdArch:
+		return stub.AMD64
+	default:
+		return nil
+	}
 }
 
 // PE32+ envelope layout constants. Matches what peln/linker emits so

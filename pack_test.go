@@ -83,16 +83,22 @@ func roundTripCheck(t *testing.T, in []byte, opts Options) PackResult {
 		t.Fatalf("round-trip mismatch: decoded %d bytes, want %d", dec.Len(), len(in))
 	}
 
-	// And the .stub placeholder is still the sentinel: PR2 will
-	// overwrite it; until then, the section must carry the marker so
-	// downstream tooling (and the PR2 patcher) can locate the slot
-	// reliably.
-	stub, err := findSection(packed.Bytes(), stubSectionName)
-	if err != nil {
-		t.Fatalf("findSection(.stub): %v", err)
-	}
-	if !bytes.HasPrefix(stub, []byte(stubPlaceholderSentinel)) {
-		t.Fatalf(".stub does not start with %q", stubPlaceholderSentinel)
+	// For arches still on the PR1 sentinel envelope, the .stub
+	// placeholder must still carry the marker so downstream tooling
+	// (and the PR2-next-sprint patcher) can locate the slot reliably.
+	// For arches with a real per-arch stub blob shipped in this
+	// build (PR2: amd64), the envelope IS the stub PE and there is
+	// no .stub section to assert on -- the stub's own .text holds
+	// the runtime decompressor, and Pack just appends .payload.
+	arch := res.Arch
+	if archStubBlob(arch) == nil {
+		stub, err := findSection(packed.Bytes(), stubSectionName)
+		if err != nil {
+			t.Fatalf("findSection(.stub): %v", err)
+		}
+		if !bytes.HasPrefix(stub, []byte(stubPlaceholderSentinel)) {
+			t.Fatalf(".stub does not start with %q", stubPlaceholderSentinel)
+		}
 	}
 	return res
 }
@@ -334,14 +340,27 @@ func TestFindSectionPointsPastEnd(t *testing.T) {
 }
 
 func TestPackPlaceholderEntryPointsIntoStub(t *testing.T) {
-	in := fixturePE(AmdArch, 256)
+	// PR1 acceptance only applies to arches still on the placeholder
+	// skeleton. For arches with a real stub blob, the entry point
+	// lives in the stub PE's .text (whatever the TamaGo linker chose)
+	// -- not in a .stub section by name. We pick an arch that's still
+	// on the sentinel so this invariant remains testable until all
+	// four arches have stubs.
+	var sentinelArch Arch = -1
+	for _, a := range []Arch{ArmArch, RiscvArch, LoongArch, AmdArch} {
+		if archStubBlob(a) == nil {
+			sentinelArch = a
+			break
+		}
+	}
+	if sentinelArch == -1 {
+		t.Skip("all arches now have real stub blobs; placeholder entry test is moot")
+	}
+	in := fixturePE(sentinelArch, 256)
 	var packed bytes.Buffer
 	if _, err := Pack(bytes.NewReader(in), &packed, Options{}); err != nil {
 		t.Fatalf("Pack: %v", err)
 	}
-	// Read entry point + .stub RVA out of the packed image and prove
-	// the entry points inside the .stub section. PR2 will use this
-	// guarantee when it overwrites the .stub body.
 	pe := packed.Bytes()
 	elfanew := binary.LittleEndian.Uint32(pe[0x3C:])
 	optOff := int(elfanew) + 4 + 20
@@ -352,6 +371,34 @@ func TestPackPlaceholderEntryPointsIntoStub(t *testing.T) {
 	stubVS := binary.LittleEndian.Uint32(pe[stubHdr+8:])
 	if entryRVA < stubRVA || entryRVA >= stubRVA+stubVS+1 {
 		t.Fatalf("entry RVA 0x%x not inside .stub [0x%x, 0x%x)", entryRVA, stubRVA, stubRVA+stubVS)
+	}
+}
+
+// TestPackAmd64UsesRealStub asserts that packing on amd64 produces an
+// envelope that IS the embedded stub PE (sections preserved + .payload
+// appended), not the placeholder skeleton. This is the PR2 amd64
+// acceptance: the output PE has the stub's .text/.rodata/.data/.reloc
+// sections AND a freshly appended .payload, and does NOT have a .stub
+// section.
+func TestPackAmd64UsesRealStub(t *testing.T) {
+	if archStubBlob(AmdArch) == nil {
+		t.Skip("amd64 stub blob not present in this build")
+	}
+	in := fixturePE(AmdArch, 512)
+	var packed bytes.Buffer
+	if _, err := Pack(bytes.NewReader(in), &packed, Options{}); err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+	pe := packed.Bytes()
+	if _, err := findSection(pe, payloadSectionName); err != nil {
+		t.Fatalf("packed image missing .payload: %v", err)
+	}
+	if _, err := findSection(pe, stubSectionName); err == nil {
+		t.Fatalf("packed amd64 image unexpectedly has a .stub section -- stub envelope should use its own .text/.rodata/.data/.reloc")
+	}
+	// Must contain the stub's .text by name (TamaGo PIE convention).
+	if _, err := findSection(pe, ".text"); err != nil {
+		t.Fatalf("packed amd64 image missing stub .text section: %v", err)
 	}
 }
 
