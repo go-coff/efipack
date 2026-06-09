@@ -139,15 +139,28 @@ func packBytes(src []byte, out io.Writer, opts Options) (PackResult, error) {
 	if err != nil {
 		return PackResult{}, err
 	}
-	packed, err := appender.Append(envelope, []appender.Section{
-		{
-			Name:            payloadSectionName,
-			Data:            payload,
-			Characteristics: appender.DefaultCharacteristics,
-		},
-	})
+	// Insert .payload BEFORE .reloc in the section table so EDK2-style
+	// PE loaders, which walk the section table in declared order and
+	// short-circuit once they have applied the relocation directory, copy
+	// our payload's raw bytes into memory at its declared VirtualAddress.
+	// Appending after .reloc (the natural Append behaviour) left the
+	// section header intact but the bytes never reached RAM — see
+	// AppendBefore's docstring for the EDK2 backstory.
+	//
+	// Envelopes that don't carry a .reloc section (e.g. the PR1 skeleton
+	// placeholder) fall back to plain Append: AppendBefore returns the
+	// "section not found" error which we catch and retry.
+	payloadSection := appender.Section{
+		Name:            payloadSectionName,
+		Data:            payload,
+		Characteristics: appender.DefaultCharacteristics,
+	}
+	packed, err := appender.AppendBefore(envelope, ".reloc", []appender.Section{payloadSection})
 	if err != nil {
-		return PackResult{}, fmt.Errorf("efipack: append payload: %w", err)
+		packed, err = appender.Append(envelope, []appender.Section{payloadSection})
+		if err != nil {
+			return PackResult{}, fmt.Errorf("efipack: append payload: %w", err)
+		}
 	}
 
 	if _, err := out.Write(packed); err != nil {
