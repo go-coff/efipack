@@ -208,6 +208,8 @@ func archStubBlob(a Arch) []byte {
 	switch a {
 	case AmdArch:
 		return stub.AMD64
+	case ArmArch:
+		return stub.ARM64
 	default:
 		return nil
 	}

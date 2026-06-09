@@ -50,3 +50,40 @@ func TestAMD64BlobNonEmpty(t *testing.T) {
 		t.Fatalf("AMD64 blob is empty -- //go:embed did not load blobs/amd64.efi.bin")
 	}
 }
+
+// TestARM64BlobIsPE32Plus asserts that the embedded arm64 blob is a
+// well-formed PE32+ image whose COFF Machine field matches the
+// aarch64 EFI machine (0xaa64). Same guard category as the amd64
+// test -- protects against a wrong-GOARCH rebuild leaking through.
+func TestARM64BlobIsPE32Plus(t *testing.T) {
+	b := ARM64
+	if len(b) < 0x40 {
+		t.Fatalf("ARM64 blob too small (%d bytes)", len(b))
+	}
+	if b[0] != 'M' || b[1] != 'Z' {
+		t.Fatalf("ARM64 blob is not a PE/MZ image")
+	}
+	elfanew := binary.LittleEndian.Uint32(b[0x3C:])
+	if int(elfanew)+24 > len(b) {
+		t.Fatalf("ARM64 blob truncated PE header (e_lfanew=%d)", elfanew)
+	}
+	if string(b[elfanew:elfanew+4]) != "PE\x00\x00" {
+		t.Fatalf("ARM64 blob missing PE signature at 0x%x", elfanew)
+	}
+	mach := binary.LittleEndian.Uint16(b[elfanew+4:])
+	if mach != 0xaa64 {
+		t.Fatalf("ARM64 blob Machine = 0x%04x, want 0xaa64 (IMAGE_FILE_MACHINE_ARM64)", mach)
+	}
+	optMagic := binary.LittleEndian.Uint16(b[int(elfanew)+4+20:])
+	if optMagic != 0x20b {
+		t.Fatalf("ARM64 blob Optional Header Magic = 0x%x, want 0x20b (PE32+)", optMagic)
+	}
+}
+
+// TestARM64BlobNonEmpty is the cheap sanity check that the //go:embed
+// directive actually pulled in blobs/arm64.efi.bin.
+func TestARM64BlobNonEmpty(t *testing.T) {
+	if len(ARM64) == 0 {
+		t.Fatalf("ARM64 blob is empty -- //go:embed did not load blobs/arm64.efi.bin")
+	}
+}
