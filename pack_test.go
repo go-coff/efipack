@@ -171,9 +171,59 @@ func TestPackReadError(t *testing.T) {
 func TestPackCompressorError(t *testing.T) {
 	in := fixturePE(AmdArch, 64)
 	var out bytes.Buffer
-	_, err := Pack(bytes.NewReader(in), &out, Options{Compressor: LZFSE})
+	// LZ4 is still a not-yet-wired codec; LZFSE was wired in M6.2 PR4.
+	_, err := Pack(bytes.NewReader(in), &out, Options{Compressor: LZ4})
 	if !errors.Is(err, ErrCompressorNotImplemented) {
-		t.Fatalf("Pack(LZFSE) = %v, want ErrCompressorNotImplemented", err)
+		t.Fatalf("Pack(LZ4) = %v, want ErrCompressorNotImplemented", err)
+	}
+}
+
+// TestPackLZFSERoundTrip is the LZFSE counterpart of
+// TestPackRoundTripAllArches: Pack with Compressor=LZFSE on every
+// supported arch must produce a packed PE whose .payload header
+// carries the "LZFS" algo tag and whose body decodes back to the
+// original input byte-for-byte. Together with the codec-level
+// round-trip in compressor_test.go this is the host-side acceptance
+// for the M6.2 PR4 wiring; the runtime stub is still flate-only so
+// the resulting envelopes are not yet runnable under firmware.
+func TestPackLZFSERoundTrip(t *testing.T) {
+	const payloadLen = 8 * 1024
+	cases := []struct {
+		name string
+		arch Arch
+	}{
+		{"amd64", AmdArch},
+		{"arm64", ArmArch},
+		{"riscv64", RiscvArch},
+		{"loong64", LoongArch},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			in := fixturePE(c.arch, payloadLen)
+			res := roundTripCheck(t, in, Options{Compressor: LZFSE})
+			if res.Compressor != LZFSE {
+				t.Fatalf("result.Compressor = %v, want LZFSE", res.Compressor)
+			}
+		})
+	}
+}
+
+// TestPackLZFSEAlgoTag is a tight Pack-level check that the
+// .payload algo tag byte stamped by Pack reflects LZFSE when
+// opts.Compressor = LZFSE. This is what the runtime stub will
+// dispatch on once an LZFSE-aware decompressor ships.
+func TestPackLZFSEAlgoTag(t *testing.T) {
+	in := fixturePE(AmdArch, 1024)
+	var packed bytes.Buffer
+	if _, err := Pack(bytes.NewReader(in), &packed, Options{Compressor: LZFSE}); err != nil {
+		t.Fatalf("Pack(LZFSE): %v", err)
+	}
+	algo, _, _, err := ReadPayload(packed.Bytes())
+	if err != nil {
+		t.Fatalf("ReadPayload: %v", err)
+	}
+	if algo != "LZFS" {
+		t.Fatalf("payload algo tag = %q, want %q", algo, "LZFS")
 	}
 }
 

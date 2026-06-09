@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+
+	"github.com/go-compressions/lzfse"
 )
 
 // Compressor is the body-compression algorithm used by Pack.
@@ -66,7 +68,10 @@ func switchCompressor(c Compressor, level int) (bodyCodec, error) {
 	case Flate:
 		return &flateCodec{level: level}, nil
 	case LZFSE:
-		return nil, ErrCompressorNotImplemented
+		// LZFSE is a single-mode algorithm with no notion of a
+		// compression level; the level argument is intentionally
+		// ignored here.
+		return lzfseCodec{}, nil
 	case LZ4:
 		return nil, ErrCompressorNotImplemented
 	default:
@@ -114,4 +119,50 @@ func (f *flateCodec) Decode(dst io.Writer, src []byte) error {
 // via //go:embed.
 func (f *flateCodec) StubBlobName() string {
 	return "decompress-flate"
+}
+
+// lzfseCodec is the github.com/go-compressions/lzfse implementation
+// of bodyCodec. LZFSE is a single-mode algorithm (no level knob);
+// switchCompressor discards Options.Level on the LZFSE path.
+//
+// IMPORTANT: as of M6.2 PR4 the lzfse codec is host-side only. The
+// runtime decompressor stubs embedded under stub/blobs/<arch>.efi.bin
+// are still Flate-based; running a packed EFI whose .payload was
+// produced with LZFSE would fault inside the stub. Wiring LZFSE-aware
+// runtime stubs is a deferred follow-up — meanwhile use -c flate for
+// runnable packed EFIs.
+type lzfseCodec struct{}
+
+// Encode writes an LZFSE-compressed stream of src to dst.
+func (lzfseCodec) Encode(dst io.Writer, src []byte) error {
+	enc, err := lzfse.Compress(src)
+	if err != nil {
+		return fmt.Errorf("efipack: lzfse compress: %w", err)
+	}
+	if _, err := dst.Write(enc); err != nil {
+		return fmt.Errorf("efipack: lzfse write: %w", err)
+	}
+	return nil
+}
+
+// Decode reads an LZFSE-compressed src and writes the decoded bytes
+// to dst. Used by host-side round-trip tests; the runtime stub will
+// re-implement decode against its own TamaGo-friendly LZFSE inflate
+// in a future PR.
+func (lzfseCodec) Decode(dst io.Writer, src []byte) error {
+	dec, err := lzfse.Decompress(src)
+	if err != nil {
+		return fmt.Errorf("efipack: lzfse decompress: %w", err)
+	}
+	if _, err := dst.Write(dec); err != nil {
+		return fmt.Errorf("efipack: lzfse write: %w", err)
+	}
+	return nil
+}
+
+// StubBlobName returns the per-arch decompressor stub blob name the
+// future LZFSE-aware runtime stub will register under. The blobs do
+// NOT exist yet (see lzfseCodec doc comment).
+func (lzfseCodec) StubBlobName() string {
+	return "decompress-lzfse"
 }

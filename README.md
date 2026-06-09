@@ -54,7 +54,7 @@ res, err := efipack.Pack(in, out, efipack.Options{
 | `Arch` (`AmdArch` / `ArmArch` / `RiscvArch` / `LoongArch`) | PE machine |
 | `InferArch(pe) (Arch, error)` | read COFF.Machine without `debug/pe` (works on loong64) |
 | `ReadPayload(pe) (algo, uncompressedSize, body, err)` | inverse of Pack's envelope; used by host tests and by PR2's runtime stub |
-| `ErrCompressorNotImplemented` | sentinel for `LZFSE` / `LZ4` until PR2 wires them |
+| `ErrCompressorNotImplemented` | sentinel for codecs that aren't wired yet — `LZ4` only as of M6.2 PR4 |
 
 ### `.payload` wire format
 
@@ -81,10 +81,25 @@ is negligible against the ~5 MiB binaries we are compressing. LZFSE
 remains pluggable via the `Compressor` enum for cases where the host has
 a larger budget than the cloud-boot baseline.
 
+## LZFSE — host-side only (M6.2 PR4)
+
+`Compressor = LZFSE` was wired in v0.2.0 via
+[`github.com/go-compressions/lzfse`](https://github.com/go-compressions/lzfse).
+It works end-to-end on the **host side**: `Pack` produces a structurally
+valid PE32+ envelope whose `.payload` decodes back to the original input
+byte-for-byte. **However**, the embedded per-arch runtime decompressor
+stubs (`stub/blobs/<arch>.efi.bin`) are still Flate-only — a packed binary
+produced with `Compressor = LZFSE` will NOT boot under firmware because
+the stub it inherits doesn't know how to decode `LZFS`. Rebuilding the
+runtime stubs with an LZFSE inflate (and re-embedding them) is a deferred
+follow-up; meanwhile use `Compressor = Flate` for runnable packed EFIs.
+
 ## Dependencies
 
 - [`github.com/go-coff/peln`](https://github.com/go-coff/peln) — PE32+
   section-append (used to attach `.payload` to the envelope).
+- [`github.com/go-compressions/lzfse`](https://github.com/go-compressions/lzfse)
+  — pure-Go LZFSE/LZVN codec for the host-side `LZFSE` compressor (M6.2 PR4).
 
 No CGO, no vendoring, stdlib-only otherwise.
 

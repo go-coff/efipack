@@ -103,10 +103,110 @@ func TestSwitchCompressorFlateDecodeMalformed(t *testing.T) {
 	}
 }
 
-func TestSwitchCompressorLZFSENotImplemented(t *testing.T) {
-	_, err := switchCompressor(LZFSE, 0)
-	if !errors.Is(err, ErrCompressorNotImplemented) {
-		t.Fatalf("switchCompressor(LZFSE) = %v, want ErrCompressorNotImplemented", err)
+// TestLZFSEEncodeDecodeRoundTrip mirrors the flate round-trip: a
+// large patterned payload encodes to fewer bytes than the input and
+// decodes back to the original byte-for-byte. Also asserts
+// switchCompressor(LZFSE) no longer returns ErrCompressorNotImplemented
+// (M6.2 PR4 wired the real codec).
+func TestLZFSEEncodeDecodeRoundTrip(t *testing.T) {
+	codec, err := switchCompressor(LZFSE, 0)
+	if err != nil {
+		t.Fatalf("switchCompressor(LZFSE): %v", err)
+	}
+	if errors.Is(err, ErrCompressorNotImplemented) {
+		t.Fatalf("switchCompressor(LZFSE) still returns ErrCompressorNotImplemented")
+	}
+	if name := codec.StubBlobName(); name != "decompress-lzfse" {
+		t.Fatalf("StubBlobName = %q, want decompress-lzfse", name)
+	}
+
+	// Same shape as the flate round-trip: a large repeating payload
+	// guarantees a compression ratio strictly < 1 so we exercise the
+	// codec's match-finding, not just its passthrough path.
+	src := bytes.Repeat([]byte("efipack lzfse round-trip "), 4096)
+
+	var enc bytes.Buffer
+	if err := codec.Encode(&enc, src); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if enc.Len() >= len(src) {
+		t.Fatalf("Encode produced %d bytes for %d input; expected compression", enc.Len(), len(src))
+	}
+
+	var dec bytes.Buffer
+	if err := codec.Decode(&dec, enc.Bytes()); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if !bytes.Equal(dec.Bytes(), src) {
+		t.Fatalf("round-trip mismatch: got %d bytes, want %d", dec.Len(), len(src))
+	}
+}
+
+// TestLZFSEIgnoresLevel asserts that switchCompressor(LZFSE, level)
+// returns a working codec irrespective of the level argument — LZFSE
+// is a single-mode algorithm with no compression-level knob.
+func TestLZFSEIgnoresLevel(t *testing.T) {
+	for _, lvl := range []int{-2, 0, 1, 9, 42} {
+		codec, err := switchCompressor(LZFSE, lvl)
+		if err != nil {
+			t.Fatalf("switchCompressor(LZFSE, %d): %v", lvl, err)
+		}
+		src := []byte("hello lzfse no levels")
+		var enc bytes.Buffer
+		if err := codec.Encode(&enc, src); err != nil {
+			t.Fatalf("Encode(level=%d): %v", lvl, err)
+		}
+		var dec bytes.Buffer
+		if err := codec.Decode(&dec, enc.Bytes()); err != nil {
+			t.Fatalf("Decode(level=%d): %v", lvl, err)
+		}
+		if !bytes.Equal(dec.Bytes(), src) {
+			t.Fatalf("round-trip mismatch at level=%d", lvl)
+		}
+	}
+}
+
+// TestLZFSEDecodeMalformed exercises the Decode error path: bogus
+// input bytes that don't begin with a valid LZFSE block magic should
+// surface an error rather than a silent empty output.
+func TestLZFSEDecodeMalformed(t *testing.T) {
+	codec, err := switchCompressor(LZFSE, 0)
+	if err != nil {
+		t.Fatalf("switchCompressor(LZFSE): %v", err)
+	}
+	var dec bytes.Buffer
+	if err := codec.Decode(&dec, []byte{0xff, 0xff, 0xff, 0xff, 0xff}); err == nil {
+		t.Fatalf("Decode: want error for malformed input, got nil")
+	}
+}
+
+// TestLZFSEEncodeWriteError forces the dst-write error branch in
+// lzfseCodec.Encode. lzfse.Compress always succeeds for small inputs;
+// the io.Writer.Write call after it is what surfaces the failure.
+func TestLZFSEEncodeWriteError(t *testing.T) {
+	codec, err := switchCompressor(LZFSE, 0)
+	if err != nil {
+		t.Fatalf("switchCompressor(LZFSE): %v", err)
+	}
+	if err := codec.Encode(failingWriter{}, []byte("hi")); err == nil {
+		t.Fatalf("Encode(failingWriter): want error, got nil")
+	}
+}
+
+// TestLZFSEDecodeWriteError forces the dst-write error branch in
+// lzfseCodec.Decode. We feed a valid LZFSE stream so the decoder
+// succeeds, then the io.Writer.Write call fails.
+func TestLZFSEDecodeWriteError(t *testing.T) {
+	codec, err := switchCompressor(LZFSE, 0)
+	if err != nil {
+		t.Fatalf("switchCompressor(LZFSE): %v", err)
+	}
+	var enc bytes.Buffer
+	if err := codec.Encode(&enc, []byte("hello lzfse decode write error")); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if err := codec.Decode(failingWriter{}, enc.Bytes()); err == nil {
+		t.Fatalf("Decode(failingWriter): want error, got nil")
 	}
 }
 
