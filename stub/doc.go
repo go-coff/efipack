@@ -14,9 +14,10 @@
 // self-extracting PE32+ that the firmware can load and execute as a
 // drop-in replacement for the original (unpacked) payload.
 //
-// M6.2 PR2 ships amd64 only; arm64 / riscv64 / loong64 land in a
-// follow-up sprint once the same chain-boot mechanism is validated
-// per-arch.
+// M6.2 PR2 ships stubs for all four EFI machines (amd64, arm64,
+// riscv64, loong64). arm64/riscv64/loong64 are GREEN under the live
+// QEMU+EDK2 smoke matrix; amd64 has a runtime crash inside the stub
+// and is tracked on the m6-2-pr2-amd64-wip branch for follow-up.
 //
 // The blobs are pure data — they describe the firmware-side stub
 // binary, not the host build's architecture — so this package

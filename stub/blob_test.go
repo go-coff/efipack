@@ -87,3 +87,78 @@ func TestARM64BlobNonEmpty(t *testing.T) {
 		t.Fatalf("ARM64 blob is empty -- //go:embed did not load blobs/arm64.efi.bin")
 	}
 }
+
+// TestRISCV64BlobIsPE32Plus asserts that the embedded riscv64 blob is
+// a well-formed PE32+ image whose COFF Machine field matches the
+// riscv64 EFI machine (0x5064). Same guard category as the amd64/arm64
+// tests -- protects against a wrong-GOARCH rebuild leaking through.
+func TestRISCV64BlobIsPE32Plus(t *testing.T) {
+	b := RISCV64Blob
+	if len(b) < 0x40 {
+		t.Fatalf("RISCV64 blob too small (%d bytes)", len(b))
+	}
+	if b[0] != 'M' || b[1] != 'Z' {
+		t.Fatalf("RISCV64 blob is not a PE/MZ image")
+	}
+	elfanew := binary.LittleEndian.Uint32(b[0x3C:])
+	if int(elfanew)+24 > len(b) {
+		t.Fatalf("RISCV64 blob truncated PE header (e_lfanew=%d)", elfanew)
+	}
+	if string(b[elfanew:elfanew+4]) != "PE\x00\x00" {
+		t.Fatalf("RISCV64 blob missing PE signature at 0x%x", elfanew)
+	}
+	mach := binary.LittleEndian.Uint16(b[elfanew+4:])
+	if mach != 0x5064 {
+		t.Fatalf("RISCV64 blob Machine = 0x%04x, want 0x5064 (IMAGE_FILE_MACHINE_RISCV64)", mach)
+	}
+	optMagic := binary.LittleEndian.Uint16(b[int(elfanew)+4+20:])
+	if optMagic != 0x20b {
+		t.Fatalf("RISCV64 blob Optional Header Magic = 0x%x, want 0x20b (PE32+)", optMagic)
+	}
+}
+
+// TestRISCV64BlobNonEmpty is the cheap sanity check that the //go:embed
+// directive actually pulled in blobs/riscv64.efi.bin.
+func TestRISCV64BlobNonEmpty(t *testing.T) {
+	if len(RISCV64Blob) == 0 {
+		t.Fatalf("RISCV64 blob is empty -- //go:embed did not load blobs/riscv64.efi.bin")
+	}
+}
+
+// TestLoongArch64BlobIsPE32Plus asserts that the embedded loong64 blob
+// is a well-formed PE32+ image whose COFF Machine field matches the
+// LoongArch64 EFI machine (0x6264). Same guard category as the
+// amd64/arm64 tests -- protects against a wrong-GOARCH rebuild leaking
+// through.
+func TestLoongArch64BlobIsPE32Plus(t *testing.T) {
+	b := LoongArch64Blob
+	if len(b) < 0x40 {
+		t.Fatalf("LoongArch64 blob too small (%d bytes)", len(b))
+	}
+	if b[0] != 'M' || b[1] != 'Z' {
+		t.Fatalf("LoongArch64 blob is not a PE/MZ image")
+	}
+	elfanew := binary.LittleEndian.Uint32(b[0x3C:])
+	if int(elfanew)+24 > len(b) {
+		t.Fatalf("LoongArch64 blob truncated PE header (e_lfanew=%d)", elfanew)
+	}
+	if string(b[elfanew:elfanew+4]) != "PE\x00\x00" {
+		t.Fatalf("LoongArch64 blob missing PE signature at 0x%x", elfanew)
+	}
+	mach := binary.LittleEndian.Uint16(b[elfanew+4:])
+	if mach != 0x6264 {
+		t.Fatalf("LoongArch64 blob Machine = 0x%04x, want 0x6264 (IMAGE_FILE_MACHINE_LOONGARCH64)", mach)
+	}
+	optMagic := binary.LittleEndian.Uint16(b[int(elfanew)+4+20:])
+	if optMagic != 0x20b {
+		t.Fatalf("LoongArch64 blob Optional Header Magic = 0x%x, want 0x20b (PE32+)", optMagic)
+	}
+}
+
+// TestLoongArch64BlobNonEmpty is the cheap sanity check that the
+// //go:embed directive actually pulled in blobs/loong64.efi.bin.
+func TestLoongArch64BlobNonEmpty(t *testing.T) {
+	if len(LoongArch64Blob) == 0 {
+		t.Fatalf("LoongArch64 blob is empty -- //go:embed did not load blobs/loong64.efi.bin")
+	}
+}

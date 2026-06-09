@@ -200,6 +200,34 @@ func TestBuildSkeletonUnsupportedArch(t *testing.T) {
 	}
 }
 
+// TestArchStubBlobUnknown asserts archStubBlob returns nil for an
+// Arch value outside the four real machines. This branch keeps
+// the future-arch path covered now that all four canonical arches
+// ship a real stub blob.
+func TestArchStubBlobUnknown(t *testing.T) {
+	if got := archStubBlob(Arch(99)); got != nil {
+		t.Fatalf("archStubBlob(99) = %d bytes, want nil", len(got))
+	}
+}
+
+// TestEnvelopeBaseFallsBackToSkeleton asserts that for an Arch with
+// no real stub blob, envelopeBase falls back to buildSkeleton (the
+// placeholder PE skeleton). With all four canonical arches now
+// shipping real stubs, this protects the sentinel branch behaviour
+// against accidental regression.
+func TestEnvelopeBaseFallsBackToSkeleton(t *testing.T) {
+	// AmdArch / ArmArch / RiscvArch / LoongArch all have stubs in
+	// this build. buildSkeleton accepts any Arch whose .machine() is
+	// non-zero. Since archStubBlob returns nil for any Arch outside
+	// those four, an unrecognised Arch routes through buildSkeleton
+	// -- which then rejects on the machine==0 check. The error we
+	// expect therefore comes from buildSkeleton, not envelopeBase
+	// directly, but the routing IS the line we want to cover.
+	if _, err := envelopeBase(Arch(99)); err == nil {
+		t.Fatalf("envelopeBase(99): want error from skeleton fallback, got nil")
+	}
+}
+
 func TestPayloadAlgoTagUnknown(t *testing.T) {
 	if got := payloadAlgoTag(Compressor(99)); got != "????" {
 		t.Fatalf("payloadAlgoTag(99) = %q, want %q", got, "????")
@@ -399,6 +427,78 @@ func TestPackAmd64UsesRealStub(t *testing.T) {
 	// Must contain the stub's .text by name (TamaGo PIE convention).
 	if _, err := findSection(pe, ".text"); err != nil {
 		t.Fatalf("packed amd64 image missing stub .text section: %v", err)
+	}
+}
+
+// TestPackArm64UsesRealStub mirrors TestPackAmd64UsesRealStub for
+// arm64. Same acceptance shape: the envelope is the embedded stub PE
+// with .payload appended, NOT the placeholder skeleton.
+func TestPackArm64UsesRealStub(t *testing.T) {
+	if archStubBlob(ArmArch) == nil {
+		t.Skip("arm64 stub blob not present in this build")
+	}
+	in := fixturePE(ArmArch, 512)
+	var packed bytes.Buffer
+	if _, err := Pack(bytes.NewReader(in), &packed, Options{}); err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+	pe := packed.Bytes()
+	if _, err := findSection(pe, payloadSectionName); err != nil {
+		t.Fatalf("packed image missing .payload: %v", err)
+	}
+	if _, err := findSection(pe, stubSectionName); err == nil {
+		t.Fatalf("packed arm64 image unexpectedly has a .stub section -- stub envelope should use its own .text/.rodata/.data/.reloc")
+	}
+	if _, err := findSection(pe, ".text"); err != nil {
+		t.Fatalf("packed arm64 image missing stub .text section: %v", err)
+	}
+}
+
+// TestPackRiscv64UsesRealStub mirrors TestPackAmd64UsesRealStub for
+// riscv64. Same acceptance shape: the envelope is the embedded stub
+// PE with .payload appended, NOT the placeholder skeleton.
+func TestPackRiscv64UsesRealStub(t *testing.T) {
+	if archStubBlob(RiscvArch) == nil {
+		t.Skip("riscv64 stub blob not present in this build")
+	}
+	in := fixturePE(RiscvArch, 512)
+	var packed bytes.Buffer
+	if _, err := Pack(bytes.NewReader(in), &packed, Options{}); err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+	pe := packed.Bytes()
+	if _, err := findSection(pe, payloadSectionName); err != nil {
+		t.Fatalf("packed image missing .payload: %v", err)
+	}
+	if _, err := findSection(pe, stubSectionName); err == nil {
+		t.Fatalf("packed riscv64 image unexpectedly has a .stub section -- stub envelope should use its own .text/.rodata/.data/.reloc")
+	}
+	if _, err := findSection(pe, ".text"); err != nil {
+		t.Fatalf("packed riscv64 image missing stub .text section: %v", err)
+	}
+}
+
+// TestPackLoong64UsesRealStub mirrors TestPackAmd64UsesRealStub for
+// loong64. Same acceptance shape: the envelope is the embedded stub
+// PE with .payload appended, NOT the placeholder skeleton.
+func TestPackLoong64UsesRealStub(t *testing.T) {
+	if archStubBlob(LoongArch) == nil {
+		t.Skip("loong64 stub blob not present in this build")
+	}
+	in := fixturePE(LoongArch, 512)
+	var packed bytes.Buffer
+	if _, err := Pack(bytes.NewReader(in), &packed, Options{}); err != nil {
+		t.Fatalf("Pack: %v", err)
+	}
+	pe := packed.Bytes()
+	if _, err := findSection(pe, payloadSectionName); err != nil {
+		t.Fatalf("packed image missing .payload: %v", err)
+	}
+	if _, err := findSection(pe, stubSectionName); err == nil {
+		t.Fatalf("packed loong64 image unexpectedly has a .stub section -- stub envelope should use its own .text/.rodata/.data/.reloc")
+	}
+	if _, err := findSection(pe, ".text"); err != nil {
+		t.Fatalf("packed loong64 image missing stub .text section: %v", err)
 	}
 }
 

@@ -210,6 +210,10 @@ func archStubBlob(a Arch) []byte {
 		return stub.AMD64
 	case ArmArch:
 		return stub.ARM64
+	case RiscvArch:
+		return stub.RISCV64Blob
+	case LoongArch:
+		return stub.LoongArch64Blob
 	default:
 		return nil
 	}
