@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/go-coff/brand/main/social/go-coff.png" alt="go-coff/efipack" width="720"></p>
+
 # go-coff/efipack
 
 [![CI](https://github.com/go-coff/efipack/actions/workflows/ci.yml/badge.svg)](https://github.com/go-coff/efipack/actions/workflows/ci.yml)
