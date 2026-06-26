@@ -1,4 +1,4 @@
-<p align="center"><img src="https://raw.githubusercontent.com/go-coff/brand/main/social/go-coff.png" alt="go-coff/efipack" width="720"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/go-coff/brand/main/social/go-coff-efipack.png" alt="go-coff/efipack" width="720"></p>
 
 # go-coff/efipack
 
