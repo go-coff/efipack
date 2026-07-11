@@ -32,16 +32,29 @@ EFI. At firmware load time the stub recovers its own on-disk bytes, finds
 `.payload`, decompresses, and chain-boots via `gBS->LoadImage` +
 `gBS->StartImage`.
 
-### Bootability matrix (`Compressor = Flate`)
+### Bootability matrix
 
-| Arch | Runtime stub | Boot status |
-| --- | --- | --- |
-| arm64 (`0xaa64`) | embedded | **OVMF/QEMU-verified** — packed EFI decompresses + hands off to the payload |
-| riscv64 (`0x5064`) | embedded | boots under QEMU+EDK2 smoke; PE-structural in CI |
-| loong64 (`0x6264`) | embedded | boots under QEMU+EDK2 smoke; PE-structural in CI |
-| amd64 (`0x8664`) | embedded | **not bootable** — the stub faults on entry under OVMF with an X64 `#UD` (Invalid Opcode); a TamaGo-runtime bootstrap defect, tracked for a stub rebuild. Envelope is PE-valid and host-round-trips. |
+The embedded per-arch runtime stubs decode **all three** algorithms
+(`FLAT` / `LZ4 ` / `LZFS`), so a packed EFI produced with any `Compressor`
+boots and hands off. Verified end-to-end under QEMU+OVMF by packing a
+chained payload and matching its serial marker on successful decompress +
+`gBS->LoadImage` / `gBS->StartImage`:
 
-`LZFSE` and `LZ4` are host-side only — see [below](#lzfse--lz4--host-side-only).
+| Arch | Runtime stub | FLAT | LZ4 | LZFSE |
+| --- | --- | --- | --- | --- |
+| arm64 (`0xaa64`) | embedded | **QEMU+OVMF ✓** | **QEMU+OVMF ✓** | **QEMU+OVMF ✓** |
+| amd64 (`0x8664`) | embedded | **QEMU+OVMF ✓** | **QEMU+OVMF ✓** | **QEMU+OVMF ✓** |
+| riscv64 (`0x5064`) | embedded | boots under QEMU+EDK2 smoke; PE-structural in CI | same stub path | same stub path |
+| loong64 (`0x6264`) | embedded | boots under QEMU+EDK2 smoke; PE-structural in CI | same stub path | same stub path |
+
+The earlier amd64 `#UD`-on-entry defect no longer reproduces: the current
+stub (rebuilt on the R-amd64f cpuinit `heapReserve` anchoring) boots
+cleanly under the patched OVMF used by the smoke harness.
+
+LZ4/LZFSE bootability requires `go-compressions/lz4 >= v0.1.1` and
+`go-compressions/lzfse >= v0.2.0`; earlier releases had round-trip defects
+(a 64 KiB-distance LZ4 encoder bug and an LZFSE multi-block bug) that
+produced undecodable bodies on larger real inputs.
 
 ## API surface
 
@@ -85,9 +98,9 @@ res, err := efipack.Pack(in, out, efipack.Options{
 ```
 
 The runtime stub reads this header, allocates exactly the right number
-of `EfiBootServicesCode` pages, decompresses, then chain-loads via
-`gBS->LoadImage` + `gBS->StartImage`. The shipped stubs dispatch on the
-`FLAT` algo tag only (see below).
+of `EfiBootServicesCode` pages, decompresses according to the algo tag
+(`FLAT` / `LZ4 ` / `LZFS`), then chain-loads via `gBS->LoadImage` +
+`gBS->StartImage`.
 
 ## Why Flate as the default?
 
@@ -99,25 +112,25 @@ is negligible against the ~5 MiB binaries we are compressing. LZFSE
 remains pluggable via the `Compressor` enum for cases where the host has
 a larger budget than the cloud-boot baseline.
 
-## LZFSE & LZ4 — host-side only
+## LZFSE & LZ4 — bootable
 
 `Compressor = LZFSE` (via
 [`go-compressions/lzfse`](https://github.com/go-compressions/lzfse), best
 ratio) and `Compressor = LZ4` (via
 [`go-compressions/lz4`](https://github.com/go-compressions/lz4)'s pure-Go
-block format, fastest decompress) both work end-to-end on the **host
-side**: `Pack` produces a structurally valid PE32+ envelope whose
-`.payload` decodes back to the original input byte-for-byte, with the
-matching `LZFS` / `LZ4 ` algo tag stamped in the CBP0 header.
+block format, fastest decompress) work end-to-end: `Pack` produces a
+structurally valid PE32+ envelope whose `.payload` decodes back to the
+original input byte-for-byte, and the embedded per-arch runtime stubs
+decode the matching `LZFS` / `LZ4 ` tag natively — so the packed EFI boots
+and hands off under firmware, just like `FLAT`. This is verified under
+QEMU+OVMF on amd64 and arm64 (see the bootability matrix above).
 
-**However**, the embedded per-arch runtime decompressor stubs
-(`stub/blobs/<arch>.efi.bin`) dispatch on the `FLAT` tag only — a packed
-binary produced with `LZFSE` or `LZ4` will NOT boot under firmware because
-the stub does not decode that tag (verified: an `LZ4`-packed arm64 EFI
-loads under OVMF, fails the `FLAT` check, and exits `EFI_ABORTED` without
-handing off). Rebuilding the runtime stubs with an `LZFS` / `LZ4 ` decode
-path (and re-embedding them) is gated on a TamaGo toolchain rebuild;
-meanwhile use `Compressor = Flate` for runnable packed EFIs.
+Both paths require the fixed codec releases (`go-compressions/lz4 >=
+v0.1.1`, `go-compressions/lzfse >= v0.2.0`); the earlier tags round-tripped
+small inputs in their own test suites but produced undecodable bodies on
+larger real binaries (a 64 KiB match-distance LZ4 encoder bug and an LZFSE
+multi-block bug), which is why the stubs previously shipped `FLAT`-only.
+`Flate` remains the default for its zero incremental stub cost.
 
 ## Dependencies
 
