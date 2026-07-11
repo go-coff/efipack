@@ -5,8 +5,8 @@ go 1.26.0
 require github.com/go-coff/peln v0.3.0
 
 require (
-	github.com/go-compressions/lz4 v0.1.0
-	github.com/go-compressions/lzfse v0.1.0
+	github.com/go-compressions/lz4 v0.1.1
+	github.com/go-compressions/lzfse v0.2.0
 )
 
 require (

@@ -27,16 +27,15 @@ type Compressor int
 const (
 	// Flate uses stdlib compress/flate. Default; zero stub cost.
 	Flate Compressor = iota
-	// LZFSE uses github.com/go-compressions/lzfse. Best raw ratio;
-	// host-side wired since v0.2.0. Booting an LZFSE-packed EFI needs
-	// an LZFSE-aware runtime stub (the shipped blobs decode FLAT only).
+	// LZFSE uses github.com/go-compressions/lzfse. Best raw ratio. The
+	// shipped per-arch runtime stubs decode FLAT, LZ4 and LZFSE, so an
+	// LZFSE-packed EFI boots and hands off on every supported arch
+	// (verified under QEMU+OVMF on amd64/arm64).
 	LZFSE
-	// LZ4 uses github.com/go-compressions/lz4's pure-Go block codec.
-	// Host-side wired since v0.3.0 — the fastest decompressor of the
-	// three, at a lower ratio. Like LZFSE, booting an LZ4-packed EFI
-	// needs an LZ4-aware runtime stub (the shipped blobs decode FLAT
-	// only); efipack still stamps the LZ4 body + "LZ4 " algo tag so a
-	// future LZ4-aware stub — or a host-side unpack — round-trips it.
+	// LZ4 uses github.com/go-compressions/lz4's pure-Go block codec —
+	// the fastest decompressor of the three, at a lower ratio. Like
+	// LZFSE, an LZ4-packed EFI boots on every supported arch: the
+	// shipped runtime stubs decode the "LZ4 " algo tag natively.
 	LZ4
 )
 
@@ -138,12 +137,11 @@ func (f *flateCodec) StubBlobName() string {
 // of bodyCodec. LZFSE is a single-mode algorithm (no level knob);
 // switchCompressor discards Options.Level on the LZFSE path.
 //
-// IMPORTANT: as of M6.2 PR4 the lzfse codec is host-side only. The
-// runtime decompressor stubs embedded under stub/blobs/<arch>.efi.bin
-// are still Flate-based; running a packed EFI whose .payload was
-// produced with LZFSE would fault inside the stub. Wiring LZFSE-aware
-// runtime stubs is a deferred follow-up — meanwhile use -c flate for
-// runnable packed EFIs.
+// The runtime decompressor stubs embedded under stub/blobs/<arch>.efi.bin
+// decode LZFSE natively (via the same go-compressions/lzfse package used
+// here), so an LZFSE-packed EFI boots and hands off on every supported
+// arch. Requires go-compressions/lzfse >= v0.2.0, which fixes a
+// multi-block round-trip defect present in v0.1.0.
 type lzfseCodec struct{}
 
 // Encode writes an LZFSE-compressed stream of src to dst.
@@ -194,12 +192,12 @@ func (lzfseCodec) StubBlobName() string {
 // passes the CBP0 header's uncompressed size as the hint to avoid the
 // reallocations.
 //
-// IMPORTANT: as of v0.3.0 this codec is host-side only. The runtime
-// decompressor stubs embedded under stub/blobs/<arch>.efi.bin decode
-// the FLAT algo tag exclusively; running a packed EFI whose .payload
-// was produced with LZ4 (or LZFSE) faults inside the stub. Shipping an
-// LZ4-aware runtime stub is a follow-up gated on a TamaGo rebuild —
-// meanwhile use Flate for runnable packed EFIs.
+// The runtime decompressor stubs embedded under stub/blobs/<arch>.efi.bin
+// decode the "LZ4 " algo tag natively (via the same go-compressions/lz4
+// DecompressBlock used here, seeded with the CBP0 uncompressed size), so
+// an LZ4-packed EFI boots and hands off on every supported arch. Requires
+// go-compressions/lz4 >= v0.1.1, which fixes a 64 KiB-distance encoder
+// defect that produced undecodable blocks on larger inputs.
 type lz4Codec struct{}
 
 // Encode writes a raw LZ4 block of src to dst.
