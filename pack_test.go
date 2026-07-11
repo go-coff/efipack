@@ -7,7 +7,6 @@ package efipack
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -171,10 +170,62 @@ func TestPackReadError(t *testing.T) {
 func TestPackCompressorError(t *testing.T) {
 	in := fixturePE(AmdArch, 64)
 	var out bytes.Buffer
-	// LZ4 is still a not-yet-wired codec; LZFSE was wired in M6.2 PR4.
-	_, err := Pack(bytes.NewReader(in), &out, Options{Compressor: LZ4})
-	if !errors.Is(err, ErrCompressorNotImplemented) {
-		t.Fatalf("Pack(LZ4) = %v, want ErrCompressorNotImplemented", err)
+	// Every defined Compressor (Flate, LZFSE, LZ4) is wired host-side
+	// as of v0.3.0, so the switchCompressor error branch inside
+	// packBytes is now reached only by an out-of-range constant.
+	_, err := Pack(bytes.NewReader(in), &out, Options{Compressor: Compressor(99)})
+	if err == nil {
+		t.Fatalf("Pack(Compressor(99)): want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown compressor") {
+		t.Fatalf("Pack(Compressor(99)) error = %q, want substring %q", err.Error(), "unknown compressor")
+	}
+}
+
+// TestPackLZ4RoundTrip is the LZ4 counterpart of
+// TestPackLZFSERoundTrip: Pack with Compressor=LZ4 on every supported
+// arch must produce a packed PE whose .payload header carries the
+// "LZ4 " algo tag and whose body decodes back to the original input
+// byte-for-byte. The runtime stub is still FLAT-only so the resulting
+// envelopes are not yet runnable under firmware; this is the host-side
+// acceptance for the pure-Go LZ4 wiring.
+func TestPackLZ4RoundTrip(t *testing.T) {
+	const payloadLen = 8 * 1024
+	cases := []struct {
+		name string
+		arch Arch
+	}{
+		{"amd64", AmdArch},
+		{"arm64", ArmArch},
+		{"riscv64", RiscvArch},
+		{"loong64", LoongArch},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			in := fixturePE(c.arch, payloadLen)
+			res := roundTripCheck(t, in, Options{Compressor: LZ4})
+			if res.Compressor != LZ4 {
+				t.Fatalf("result.Compressor = %v, want LZ4", res.Compressor)
+			}
+		})
+	}
+}
+
+// TestPackLZ4AlgoTag checks the .payload algo tag byte stamped by Pack
+// reflects LZ4 when opts.Compressor = LZ4 — what an LZ4-aware runtime
+// stub will dispatch on once one ships.
+func TestPackLZ4AlgoTag(t *testing.T) {
+	in := fixturePE(AmdArch, 1024)
+	var packed bytes.Buffer
+	if _, err := Pack(bytes.NewReader(in), &packed, Options{Compressor: LZ4}); err != nil {
+		t.Fatalf("Pack(LZ4): %v", err)
+	}
+	algo, _, _, err := ReadPayload(packed.Bytes())
+	if err != nil {
+		t.Fatalf("ReadPayload: %v", err)
+	}
+	if algo != "LZ4 " {
+		t.Fatalf("payload algo tag = %q, want %q", algo, "LZ4 ")
 	}
 }
 

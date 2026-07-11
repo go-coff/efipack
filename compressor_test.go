@@ -210,10 +210,108 @@ func TestLZFSEDecodeWriteError(t *testing.T) {
 	}
 }
 
-func TestSwitchCompressorLZ4NotImplemented(t *testing.T) {
-	_, err := switchCompressor(LZ4, 0)
-	if !errors.Is(err, ErrCompressorNotImplemented) {
-		t.Fatalf("switchCompressor(LZ4) = %v, want ErrCompressorNotImplemented", err)
+// TestLZ4EncodeDecodeRoundTrip mirrors the flate/lzfse round-trips: a
+// large patterned payload encodes to fewer bytes than the input and
+// decodes back to the original byte-for-byte. Also asserts
+// switchCompressor(LZ4) no longer returns ErrCompressorNotImplemented
+// (v0.3.0 wired the pure-Go go-compressions/lz4 block codec).
+func TestLZ4EncodeDecodeRoundTrip(t *testing.T) {
+	codec, err := switchCompressor(LZ4, 0)
+	if err != nil {
+		t.Fatalf("switchCompressor(LZ4): %v", err)
+	}
+	if errors.Is(err, ErrCompressorNotImplemented) {
+		t.Fatalf("switchCompressor(LZ4) still returns ErrCompressorNotImplemented")
+	}
+	if name := codec.StubBlobName(); name != "decompress-lz4" {
+		t.Fatalf("StubBlobName = %q, want decompress-lz4", name)
+	}
+
+	src := bytes.Repeat([]byte("efipack lz4 round-trip "), 4096)
+
+	var enc bytes.Buffer
+	if err := codec.Encode(&enc, src); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if enc.Len() >= len(src) {
+		t.Fatalf("Encode produced %d bytes for %d input; expected compression", enc.Len(), len(src))
+	}
+
+	var dec bytes.Buffer
+	if err := codec.Decode(&dec, enc.Bytes()); err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if !bytes.Equal(dec.Bytes(), src) {
+		t.Fatalf("round-trip mismatch: got %d bytes, want %d", dec.Len(), len(src))
+	}
+}
+
+// TestLZ4IgnoresLevel asserts switchCompressor(LZ4, level) returns a
+// working codec irrespective of the level argument — the LZ4 block
+// format has no compression-level knob.
+func TestLZ4IgnoresLevel(t *testing.T) {
+	for _, lvl := range []int{-2, 0, 1, 9, 42} {
+		codec, err := switchCompressor(LZ4, lvl)
+		if err != nil {
+			t.Fatalf("switchCompressor(LZ4, %d): %v", lvl, err)
+		}
+		src := []byte("hello lz4 no levels")
+		var enc bytes.Buffer
+		if err := codec.Encode(&enc, src); err != nil {
+			t.Fatalf("Encode(level=%d): %v", lvl, err)
+		}
+		var dec bytes.Buffer
+		if err := codec.Decode(&dec, enc.Bytes()); err != nil {
+			t.Fatalf("Decode(level=%d): %v", lvl, err)
+		}
+		if !bytes.Equal(dec.Bytes(), src) {
+			t.Fatalf("round-trip mismatch at level=%d", lvl)
+		}
+	}
+}
+
+// TestLZ4DecodeMalformed exercises the Decode error path: a token
+// requesting an extended literal length whose continuation bytes run
+// off the end of the block surfaces the go-compressions/lz4 corrupt
+// error rather than a silent empty output.
+func TestLZ4DecodeMalformed(t *testing.T) {
+	codec, err := switchCompressor(LZ4, 0)
+	if err != nil {
+		t.Fatalf("switchCompressor(LZ4): %v", err)
+	}
+	var dec bytes.Buffer
+	if err := codec.Decode(&dec, []byte{0xff, 0xff, 0xff, 0xff, 0xff}); err == nil {
+		t.Fatalf("Decode: want error for malformed input, got nil")
+	}
+}
+
+// TestLZ4EncodeWriteError forces the dst-write error branch in
+// lz4Codec.Encode: CompressBlock always succeeds, so the failure comes
+// from the io.Writer.Write that follows it.
+func TestLZ4EncodeWriteError(t *testing.T) {
+	codec, err := switchCompressor(LZ4, 0)
+	if err != nil {
+		t.Fatalf("switchCompressor(LZ4): %v", err)
+	}
+	if err := codec.Encode(failingWriter{}, []byte("hi")); err == nil {
+		t.Fatalf("Encode(failingWriter): want error, got nil")
+	}
+}
+
+// TestLZ4DecodeWriteError forces the dst-write error branch in
+// lz4Codec.Decode: a valid block decodes cleanly, then the
+// io.Writer.Write fails.
+func TestLZ4DecodeWriteError(t *testing.T) {
+	codec, err := switchCompressor(LZ4, 0)
+	if err != nil {
+		t.Fatalf("switchCompressor(LZ4): %v", err)
+	}
+	var enc bytes.Buffer
+	if err := codec.Encode(&enc, []byte("hello lz4 decode write error")); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if err := codec.Decode(failingWriter{}, enc.Bytes()); err == nil {
+		t.Fatalf("Decode(failingWriter): want error, got nil")
 	}
 }
 
