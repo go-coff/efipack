@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/go-compressions/lz4"
 	"github.com/go-compressions/lzfse"
 )
 
@@ -26,10 +27,16 @@ type Compressor int
 const (
 	// Flate uses stdlib compress/flate. Default; zero stub cost.
 	Flate Compressor = iota
-	// LZFSE uses github.com/go-compressions/lzfse. Optional; the
-	// decompressor stub grows by ~100-200 KiB. Not yet wired (PR2).
+	// LZFSE uses github.com/go-compressions/lzfse. Best raw ratio;
+	// host-side wired since v0.2.0. Booting an LZFSE-packed EFI needs
+	// an LZFSE-aware runtime stub (the shipped blobs decode FLAT only).
 	LZFSE
-	// LZ4 is reserved for a future tiny-payload optimisation.
+	// LZ4 uses github.com/go-compressions/lz4's pure-Go block codec.
+	// Host-side wired since v0.3.0 — the fastest decompressor of the
+	// three, at a lower ratio. Like LZFSE, booting an LZ4-packed EFI
+	// needs an LZ4-aware runtime stub (the shipped blobs decode FLAT
+	// only); efipack still stamps the LZ4 body + "LZ4 " algo tag so a
+	// future LZ4-aware stub — or a host-side unpack — round-trips it.
 	LZ4
 )
 
@@ -47,9 +54,13 @@ func (c Compressor) String() string {
 	}
 }
 
-// ErrCompressorNotImplemented is returned by switchCompressor for
-// algorithms that are valid Compressor constants but not yet wired in
-// this PR. PR2 implements LZFSE; LZ4 is reserved for later.
+// ErrCompressorNotImplemented is the sentinel switchCompressor
+// returns for a valid Compressor constant that has no codec wired in
+// the current build. As of v0.3.0 every defined Compressor (Flate,
+// LZFSE, LZ4) is implemented host-side, so switchCompressor no longer
+// returns it; the sentinel is retained as a stable part of the public
+// API so callers that added a Compressor constant ahead of its codec
+// can keep matching on it with errors.Is.
 var ErrCompressorNotImplemented = errors.New("efipack: compressor not implemented in this build")
 
 // bodyCodec is the internal compressor interface. Encode writes the
@@ -73,7 +84,9 @@ func switchCompressor(c Compressor, level int) (bodyCodec, error) {
 		// ignored here.
 		return lzfseCodec{}, nil
 	case LZ4:
-		return nil, ErrCompressorNotImplemented
+		// LZ4's block format has no compression-level knob, so the
+		// level argument is intentionally ignored here (as for LZFSE).
+		return lz4Codec{}, nil
 	default:
 		return nil, fmt.Errorf("efipack: unknown compressor %d", int(c))
 	}
@@ -165,4 +178,59 @@ func (lzfseCodec) Decode(dst io.Writer, src []byte) error {
 // NOT exist yet (see lzfseCodec doc comment).
 func (lzfseCodec) StubBlobName() string {
 	return "decompress-lzfse"
+}
+
+// lz4Codec implements bodyCodec via github.com/go-compressions/lz4's
+// pure-Go LZ4 block format. LZ4 favours decompression speed over
+// ratio, which suits a runtime stub that wants the smallest, simplest
+// inflate loop. Like LZFSE it has no compression-level knob, so
+// switchCompressor discards Options.Level on the LZ4 path.
+//
+// The .payload body is a single raw LZ4 block — no inner size prefix
+// — mirroring the FLAT convention where the body is exactly the codec
+// stream and nothing else. DecompressBlock recovers the precise output
+// length by parsing the block, so Decode passes a zero capacity hint
+// and lets the decoder grow its buffer; the runtime stub instead
+// passes the CBP0 header's uncompressed size as the hint to avoid the
+// reallocations.
+//
+// IMPORTANT: as of v0.3.0 this codec is host-side only. The runtime
+// decompressor stubs embedded under stub/blobs/<arch>.efi.bin decode
+// the FLAT algo tag exclusively; running a packed EFI whose .payload
+// was produced with LZ4 (or LZFSE) faults inside the stub. Shipping an
+// LZ4-aware runtime stub is a follow-up gated on a TamaGo rebuild —
+// meanwhile use Flate for runnable packed EFIs.
+type lz4Codec struct{}
+
+// Encode writes a raw LZ4 block of src to dst.
+func (lz4Codec) Encode(dst io.Writer, src []byte) error {
+	enc := lz4.CompressBlock(src)
+	if _, err := dst.Write(enc); err != nil {
+		return fmt.Errorf("efipack: lz4 write: %w", err)
+	}
+	return nil
+}
+
+// Decode reads a raw LZ4 block from src and writes the decoded bytes
+// to dst. A zero capacity hint is passed to DecompressBlock, which
+// grows its output buffer as it parses the block. Used by the
+// host-side round-trip tests; the runtime stub re-implements decode
+// against the same go-compressions/lz4 block loop, seeded with the
+// CBP0 uncompressed size.
+func (lz4Codec) Decode(dst io.Writer, src []byte) error {
+	dec, err := lz4.DecompressBlock(src, 0)
+	if err != nil {
+		return fmt.Errorf("efipack: lz4 decompress: %w", err)
+	}
+	if _, err := dst.Write(dec); err != nil {
+		return fmt.Errorf("efipack: lz4 write: %w", err)
+	}
+	return nil
+}
+
+// StubBlobName returns the per-arch decompressor stub blob name an
+// LZ4-aware runtime stub would register under. No LZ4 blob ships yet
+// (see lz4Codec doc comment).
+func (lz4Codec) StubBlobName() string {
+	return "decompress-lz4"
 }
