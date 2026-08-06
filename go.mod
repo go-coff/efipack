@@ -1,6 +1,6 @@
 module github.com/go-coff/efipack
 
-go 1.26.0
+go 1.26.4
 
 require github.com/go-coff/peln v0.3.0
 
