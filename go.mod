@@ -3,9 +3,9 @@ module github.com/go-coff/efipack
 go 1.27.1
 
 require (
-	github.com/go-coff/peln v0.3.0
-	github.com/go-compressions/lz4 v0.2.0
-	github.com/go-compressions/lzfse v0.4.1
+	github.com/go-coff/peln v0.5.0
+	github.com/go-compressions/lz4 v0.3.0
+	github.com/go-compressions/lzfse v0.5.0
 )
 
 require (
