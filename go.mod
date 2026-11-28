@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	github.com/go-coff/peln v0.6.0
-	github.com/go-compressions/lz4 v0.6.0
+	github.com/go-compressions/lz4 v0.7.0
 	github.com/go-compressions/lzfse v0.6.0
 )
 
